@@ -1,0 +1,598 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ============================================================================
+// ENUMS DEL SISTEMA
+// ============================================================================
+
+enum UserRole {
+  ADMIN_GENERAL
+  COORDINADOR_ACADEMICO
+  CONTROL_ESCOLAR
+  DOCENTE
+  ALUMNO
+}
+
+enum StudentStatus {
+  ACTIVO
+  BAJA_TEMPORAL
+  BAJA_DEFINITIVA
+  EGRESADO
+}
+
+enum Modality {
+  NO_ESCOLARIZADA // 100% en lÃ­nea
+  MIXTA           // HÃ­brida (horas conducciÃ³n docente + estudio independiente)
+}
+
+enum EducationLevel {
+  TSU
+  LICENCIATURA
+  ESPECIALIDAD
+  MAESTRIA
+  DOCTORADO
+}
+
+enum ContentItemType {
+  DOCUMENTO       // PDF, DOCX, PPTX
+  ENLACE_EXTERNO  // Recursos web o liga a sesiÃ³n sÃ­ncrona externa
+  TAREA           // Actividad entregable con rÃºbrica
+  EXAMEN          // EvaluaciÃ³n cronometrada
+  FORO            // Debate acadÃ©mico
+}
+
+enum QuestionType {
+  OPCION_MULTIPLE
+  VERDADERO_FALSO
+  ABIERTA
+}
+
+enum InventoryCategory {
+  COMPUTO_SERVIDORES
+  SOFTWARE_LICENCIAS
+  MOBILIARIO
+  LABORATORIO
+  BIBLIOTECA_FISICA
+  INFRAESTRUCTURA_RED
+}
+
+enum AssetCondition {
+  NUEVO
+  BUENO
+  EN_MANTENIMIENTO
+  OBSOLETO
+  BAJA
+}
+
+enum InventoryMovementType {
+  ENTRADA
+  SALIDA
+  ASIGNACION_RESGUARDO
+  DEVOLUCION
+  MANTENIMIENTO
+}
+
+// ============================================================================
+// 1. IDENTIDAD INSTITUCIONAL Y USUARIOS
+// ============================================================================
+
+model Institution {
+  id             String   @id @default(uuid())
+  name           String
+  legalName      String
+  cctCode        String?  @unique
+  logoUrl        String?
+  primaryColor   String   @default("#0F172A")
+  secondaryColor String   @default("#1D4ED8")
+  privacyNotice  String   @db.Text
+  supportEmail   String
+  supportPhone   String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  programs       AcademicProgram[]
+  inventoryItems InventoryItem[]
+  rvoeTechDocs   RvoeTechnicalProfile?
+
+  @@map("institutions")
+}
+
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  passwordHash  String
+  role          UserRole
+  firstName     String
+  lastName      String
+  curp          String?   @unique
+  phone         String?
+  avatarUrl     String?
+  isActive      Boolean   @default(true)
+  isDemoAccount Boolean   @default(false) // Flag para cuentas de verificadores SEP
+  lastLoginAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  studentProfile StudentProfile?
+  teacherProfile TeacherProfile?
+
+  taughtGroups       CourseGroup[]        @relation("TeacherGroups")
+  enrollments        Enrollment[]
+  submissions        ActivitySubmission[]
+  assessmentAttempts AssessmentAttempt[]
+  forumThreads       ForumThread[]
+  forumPosts         ForumPost[]
+  sentMessages       Message[]            @relation("SentMessages")
+  receivedMessages   Message[]            @relation("ReceivedMessages")
+  notifications      Notification[]
+  resourceViews      ResourceView[]
+  auditLogs          AuditLog[]
+  inventoryMovements InventoryMovement[]  @relation("MovementOperator")
+  assignedAssets     InventoryMovement[]  @relation("AssetCustodian")
+
+  @@map("users")
+}
+
+model StudentProfile {
+  id              String        @id @default(uuid())
+  userId          String        @unique
+  matricula       String        @unique
+  status          StudentStatus @default(ACTIVO)
+  admissionDate   DateTime      @default(now())
+  programId       String
+  studyPlanId     String
+  currentSemester Int           @default(1)
+  documentsJson   Json?
+
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  program   AcademicProgram @relation(fields: [programId], references: [id])
+  studyPlan StudyPlan       @relation(fields: [studyPlanId], references: [id])
+
+  @@map("student_profiles")
+}
+
+model TeacherProfile {
+  id             String   @id @default(uuid())
+  userId         String   @unique
+  employeeNumber String   @unique
+  academicDegree String
+  professionalId String?
+  specialty      String
+  hireDate       DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("teacher_profiles")
+}
+
+// ============================================================================
+// 2. GESTIÃ“N ACADÃ‰MICA Y CURRICULAR (GESTOR ESCOLAR)
+// ============================================================================
+
+model AcademicProgram {
+  id            String         @id @default(uuid())
+  institutionId String
+  name          String
+  code          String         @unique
+  level         EducationLevel
+  modality      Modality
+  rvoeNumber    String?
+  rvoeDate      DateTime?
+  description   String?        @db.Text
+  isActive      Boolean        @default(true)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  institution Institution      @relation(fields: [institutionId], references: [id])
+  studyPlans  StudyPlan[]
+  students    StudentProfile[]
+
+  @@map("academic_programs")
+}
+
+model StudyPlan {
+  id           String   @id @default(uuid())
+  programId    String
+  code         String   @unique
+  name         String
+  totalCredits Int
+  totalPeriods Int
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  program  AcademicProgram  @relation(fields: [programId], references: [id])
+  subjects Subject[]
+  students StudentProfile[]
+
+  @@map("study_plans")
+}
+
+model Subject {
+  id               String  @id @default(uuid())
+  studyPlanId      String
+  code             String
+  name             String
+  periodOrder      Int
+  credits          Int
+  teacherHours     Int
+  independentHours Int
+  generalObjective String  @db.Text
+  competencies     String? @db.Text
+  bibliography     String? @db.Text
+  evalCriteria     String? @db.Text
+
+  studyPlan StudyPlan     @relation(fields: [studyPlanId], references: [id])
+  groups    CourseGroup[]
+
+  @@unique([studyPlanId, code])
+  @@map("subjects")
+}
+
+model SchoolTerm {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  name      String
+  startDate DateTime
+  endDate   DateTime
+  isCurrent Boolean  @default(false)
+
+  groups CourseGroup[]
+
+  @@map("school_terms")
+}
+
+model CourseGroup {
+  id           String   @id @default(uuid())
+  subjectId    String
+  termId       String
+  teacherId    String
+  groupCode    String
+  scheduleNote String?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  subject       Subject          @relation(fields: [subjectId], references: [id])
+  term          SchoolTerm       @relation(fields: [termId], references: [id])
+  teacher       User             @relation("TeacherGroups", fields: [teacherId], references: [id])
+  enrollments   Enrollment[]
+  modules       LearningModule[]
+  announcements Announcement[]
+
+  @@unique([subjectId, termId, groupCode])
+  @@map("course_groups")
+}
+
+model Enrollment {
+  id         String   @id @default(uuid())
+  studentId  String
+  groupId    String
+  enrolledAt DateTime @default(now())
+  finalGrade Float?
+  passed     Boolean?
+
+  student User        @relation(fields: [studentId], references: [id])
+  group   CourseGroup @relation(fields: [groupId], references: [id])
+
+  @@unique([studentId, groupId])
+  @@map("enrollments")
+}
+
+// ============================================================================
+// 3. AULA VIRTUAL ESTILO BLACKBOARD LEARN (PORTAL LMS)
+// ============================================================================
+
+model LearningModule {
+  id          String   @id @default(uuid())
+  groupId     String
+  orderIndex  Int
+  title       String
+  description String?  @db.Text
+  isVisible   Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  group CourseGroup    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  items LearningItem[]
+
+  @@map("learning_modules")
+}
+
+model LearningItem {
+  id          String          @id @default(uuid())
+  moduleId    String
+  orderIndex  Int
+  type        ContentItemType
+  title       String
+  description String?         @db.Text
+  isVisible   Boolean         @default(true)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  fileUrl      String?
+  fileName     String?
+  fileMimeType String?
+  externalUrl  String?
+  sessionDate  DateTime?
+
+  weightPercent Float     @default(0)
+  maxScore      Float     @default(100)
+  openAt        DateTime?
+  dueAt         DateTime?
+  rubricJson    Json?
+
+  module      LearningModule       @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  submissions ActivitySubmission[]
+  assessment  Assessment?
+  forumThread ForumThread?
+  views       ResourceView[]
+
+  @@map("learning_items")
+}
+
+model ResourceView {
+  id          String   @id @default(uuid())
+  itemId      String
+  studentId   String
+  viewedAt    DateTime @default(now())
+  durationSec Int      @default(0)
+
+  item    LearningItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  student User         @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@map("resource_views")
+}
+
+// ============================================================================
+// 4. ACTIVIDADES, EVALUACIONES Y CALIFICACIONES
+// ============================================================================
+
+model ActivitySubmission {
+  id          String    @id @default(uuid())
+  itemId      String
+  studentId   String
+  contentText String?   @db.Text
+  fileUrl     String?
+  fileName    String?
+  submittedAt DateTime  @default(now())
+  score       Float?
+  feedback    String?   @db.Text
+  gradedAt    DateTime?
+
+  item    LearningItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  student User         @relation(fields: [studentId], references: [id])
+
+  @@unique([itemId, studentId])
+  @@map("activity_submissions")
+}
+
+model Assessment {
+  id                 String  @id @default(uuid())
+  itemId             String  @unique
+  timeLimitMinutes   Int     @default(60)
+  maxAttempts        Int     @default(1)
+  randomizeQuestions Boolean @default(true)
+  showResultsAfter   Boolean @default(true)
+
+  item      LearningItem        @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  questions Question[]
+  attempts  AssessmentAttempt[]
+
+  @@map("assessments")
+}
+
+model Question {
+  id           String       @id @default(uuid())
+  assessmentId String
+  type         QuestionType
+  prompt       String       @db.Text
+  points       Float        @default(10)
+  orderIndex   Int
+
+  assessment Assessment       @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  options    QuestionOption[]
+
+  @@map("questions")
+}
+
+model QuestionOption {
+  id         String  @id @default(uuid())
+  questionId String
+  text       String
+  isCorrect  Boolean @default(false)
+
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@map("question_options")
+}
+
+model AssessmentAttempt {
+  id            String    @id @default(uuid())
+  assessmentId  String
+  studentId     String
+  attemptNumber Int
+  startedAt     DateTime  @default(now())
+  finishedAt    DateTime?
+  answersJson   Json
+  autoScore     Float?
+  finalScore    Float?
+  feedback      String?   @db.Text
+
+  assessment Assessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  student    User       @relation(fields: [studentId], references: [id])
+
+  @@map("assessment_attempts")
+}
+
+// ============================================================================
+// 5. COMUNICACIÃ“N Y FOROS
+// ============================================================================
+
+model ForumThread {
+  id        String   @id @default(uuid())
+  itemId    String   @unique
+  authorId  String
+  prompt    String   @db.Text
+  createdAt DateTime @default(now())
+
+  item   LearningItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  author User         @relation(fields: [authorId], references: [id])
+  posts  ForumPost[]
+
+  @@map("forum_threads")
+}
+
+model ForumPost {
+  id        String   @id @default(uuid())
+  threadId  String
+  authorId  String
+  parentId  String?
+  content   String   @db.Text
+  grade     Float?
+  createdAt DateTime @default(now())
+
+  thread ForumThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  author User        @relation(fields: [authorId], references: [id])
+
+  @@map("forum_posts")
+}
+
+model Announcement {
+  id        String   @id @default(uuid())
+  groupId   String?
+  title     String
+  content   String   @db.Text
+  createdAt DateTime @default(now())
+
+  group CourseGroup? @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@map("announcements")
+}
+
+model Message {
+  id         String   @id @default(uuid())
+  senderId   String
+  receiverId String
+  subject    String
+  body       String   @db.Text
+  isRead     Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  sender   User @relation("SentMessages", fields: [senderId], references: [id])
+  receiver User @relation("ReceivedMessages", fields: [receiverId], references: [id])
+
+  @@map("messages")
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  title     String
+  message   String
+  linkUrl   String?
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
+}
+
+// ============================================================================
+// 6. INVENTARIO INSTITUCIONAL (GESTOR ESCOLAR)
+// ============================================================================
+
+model InventoryItem {
+  id             String            @id @default(uuid())
+  institutionId  String
+  assetTag       String            @unique
+  name           String
+  description    String?           @db.Text
+  category       InventoryCategory
+  brand          String?
+  model          String?
+  serialNumber   String?
+  quantityTotal  Int               @default(1)
+  quantityAvail  Int               @default(1)
+  condition      AssetCondition    @default(NUEVO)
+  location       String
+  isRvoeEvidence Boolean           @default(false)
+  acquiredAt     DateTime?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  institution Institution         @relation(fields: [institutionId], references: [id])
+  movements   InventoryMovement[]
+
+  @@map("inventory_items")
+}
+
+model InventoryMovement {
+  id          String                @id @default(uuid())
+  itemId      String
+  operatorId  String
+  custodianId String?
+  type        InventoryMovementType
+  quantity    Int
+  location    String?
+  notes       String?               @db.Text
+  createdAt   DateTime              @default(now())
+
+  item      InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  operator  User          @relation("MovementOperator", fields: [operatorId], references: [id])
+  custodian User?         @relation("AssetCustodian", fields: [custodianId], references: [id])
+
+  @@map("inventory_movements")
+}
+
+// ============================================================================
+// 7. AUDITORÃA Y EXPEDIENTE TÃ‰CNICO RVOE (ANEXO 4 SEP)
+// ============================================================================
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  appSource  String   // "PORTAL_LMS" | "GESTOR_ESCOLAR"
+  action     String
+  entityType String
+  entityId   String
+  ipAddress  String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
+
+model RvoeTechnicalProfile {
+  id                  String   @id @default(uuid())
+  institutionId       String   @unique
+  generalDescription  String   @db.Text
+  architectureSummary String   @db.Text
+  hardwareInfra       String   @db.Text
+  serverHostingSpec   String   @db.Text
+  databaseSpec        String   @db.Text
+  bandwidthConnect    String   @db.Text
+  storageCapacity     String   @db.Text
+  scalabilityPlan     String   @db.Text
+  supportProcedures   String   @db.Text
+  maintenancePlan     String   @db.Text
+  contingencyPlan     String   @db.Text
+  backupRecoveryPlan  String   @db.Text
+  securityPolicies    String   @db.Text
+  platformAdvantages  String   @db.Text
+  operationManualUrl  String?
+  updatedAt           DateTime @updatedAt
+
+  institution Institution @relation(fields: [institutionId], references: [id])
+
+  @@map("rvoe_technical_profiles")
+}
